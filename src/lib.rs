@@ -11,14 +11,14 @@ use core::{
     ptr::NonNull,
 };
 
-pub struct BoehmGlobalAllocator;
-pub struct BoehmGcAllocator;
+pub struct GlobalAllocator;
+pub struct GcAllocator;
 
-unsafe impl GlobalAlloc for BoehmGlobalAllocator {
+unsafe impl GlobalAlloc for GlobalAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        #[cfg(feature = "rustc_boehm")]
+        #[cfg(feature = "rustgc")]
         return GC_malloc(layout.size()) as *mut u8;
-        #[cfg(not(feature = "rustc_boehm"))]
+        #[cfg(not(feature = "rustgc"))]
         return GC_malloc_uncollectable(layout.size()) as *mut u8;
     }
 
@@ -31,7 +31,7 @@ unsafe impl GlobalAlloc for BoehmGlobalAllocator {
     }
 }
 
-unsafe impl Allocator for BoehmGcAllocator {
+unsafe impl Allocator for GcAllocator {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let ptr = unsafe { GC_malloc(layout.size()) } as *mut u8;
         assert!(!ptr.is_null());
@@ -42,7 +42,7 @@ unsafe impl Allocator for BoehmGcAllocator {
     unsafe fn deallocate(&self, _: NonNull<u8>, _: Layout) {}
 }
 
-impl BoehmGcAllocator {
+impl GcAllocator {
     pub fn force_gc() {
         unsafe { GC_gcollect() }
     }
@@ -70,7 +70,7 @@ impl BoehmGcAllocator {
         }
     }
 
-    pub fn get_stats() -> BoehmStats {
+    pub fn get_stats() -> GcStats {
         let mut ps = ProfileStats::default();
         unsafe {
             GC_get_prof_stats(
@@ -80,7 +80,7 @@ impl BoehmGcAllocator {
         }
         let total_gc_time = unsafe { GC_get_full_gc_total_time() };
 
-        BoehmStats {
+        GcStats {
             total_gc_time,
             num_collections: ps.gc_no,
             total_freed: ps.bytes_reclaimed_since_gc,
@@ -123,18 +123,19 @@ pub struct ProfileStats {
     pub(crate) expl_freed_bytes_since_gc: usize,
 }
 
-pub struct BoehmStats {
-    pub total_gc_time: usize, // In milliseconds.
-    pub num_collections: usize,
-    pub total_freed: usize,   // In bytes
-    pub total_alloced: usize, // In bytes
+#[derive(Debug)]
+pub struct GcStats {
+    total_gc_time: usize, // In milliseconds.
+    num_collections: usize,
+    total_freed: usize,   // In bytes
+    total_alloced: usize, // In bytes
 }
 
 #[link(name = "gc")]
 extern "C" {
     fn GC_malloc(nbytes: usize) -> *mut u8;
 
-    #[cfg(not(feature = "rustc_boehm"))]
+    #[cfg(not(feature = "rustgc"))]
     fn GC_malloc_uncollectable(nbytes: usize) -> *mut u8;
 
     fn GC_realloc(old: *mut u8, new_size: usize) -> *mut u8;
