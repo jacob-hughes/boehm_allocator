@@ -3,6 +3,7 @@ name = "libgc_internal"
 version = "0.1.0"
 authors = ["Jacob Hughes <jh@jakehughes.uk>"]
 edition = "2018"
+license = "Apache-2.0 OR MIT"
 
 [lib]
 test = false
