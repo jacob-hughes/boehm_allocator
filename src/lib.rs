@@ -11,10 +11,9 @@ use core::{
     ptr::NonNull,
 };
 
-pub struct GlobalAllocator;
 pub struct GcAllocator;
 
-unsafe impl GlobalAlloc for GlobalAllocator {
+unsafe impl GlobalAlloc for GcAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         #[cfg(feature = "rustgc")]
         return GC_malloc(layout.size()) as *mut u8;
