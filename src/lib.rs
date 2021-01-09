@@ -15,9 +15,9 @@ pub struct GcAllocator;
 
 unsafe impl GlobalAlloc for GcAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        #[cfg(feature = "rustgc")]
+        #[cfg(feature = "rustgc_internal")]
         return GC_malloc(layout.size()) as *mut u8;
-        #[cfg(not(feature = "rustgc"))]
+        #[cfg(not(feature = "rustgc_internal"))]
         return GC_malloc_uncollectable(layout.size()) as *mut u8;
     }
 
