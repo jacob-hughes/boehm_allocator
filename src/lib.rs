@@ -5,35 +5,42 @@
 #![feature(rustc_private)]
 #![feature(allocator_api)]
 #![feature(nonnull_slice_from_raw_parts)]
+#![cfg_attr(feature = "rustgc_internal", feature(gc))]
+#![feature(specialization)]
+#![feature(negative_impls)]
+#![allow(incomplete_features)]
 
 use core::{
     alloc::{AllocError, Allocator, GlobalAlloc, Layout},
     ptr::NonNull,
 };
 
-pub struct GlobalAllocator;
 pub struct GcAllocator;
 
-unsafe impl GlobalAlloc for GlobalAllocator {
+mod boehm;
+#[cfg(feature = "rustgc_internal")]
+mod specializer;
+
+unsafe impl GlobalAlloc for GcAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        #[cfg(feature = "rustgc")]
-        return GC_malloc(layout.size()) as *mut u8;
-        #[cfg(not(feature = "rustgc"))]
-        return GC_malloc_uncollectable(layout.size()) as *mut u8;
+        #[cfg(feature = "rustgc_internal")]
+        return boehm::GC_malloc(layout.size()) as *mut u8;
+        #[cfg(not(feature = "rustgc_internal"))]
+        return boehm::GC_malloc_uncollectable(layout.size()) as *mut u8;
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, _: Layout) {
-        GC_free(ptr);
+        boehm::GC_free(ptr);
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, _: Layout, new_size: usize) -> *mut u8 {
-        GC_realloc(ptr, new_size) as *mut u8
+        boehm::GC_realloc(ptr, new_size) as *mut u8
     }
 }
 
 unsafe impl Allocator for GcAllocator {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let ptr = unsafe { GC_malloc(layout.size()) } as *mut u8;
+        let ptr = unsafe { boehm::GC_malloc(layout.size()) } as *mut u8;
         assert!(!ptr.is_null());
         let ptr = unsafe { NonNull::new_unchecked(ptr) };
         Ok(NonNull::slice_from_raw_parts(ptr, layout.size()))
@@ -43,8 +50,14 @@ unsafe impl Allocator for GcAllocator {
 }
 
 impl GcAllocator {
+    #[cfg(feature = "rustgc_internal")]
+    pub fn maybe_optimised_alloc<T>(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        let sp = specializer::AllocationSpecializer::new();
+        sp.maybe_optimised_alloc::<T>(layout)
+    }
+
     pub fn force_gc() {
-        unsafe { GC_gcollect() }
+        unsafe { boehm::GC_gcollect() }
     }
 
     pub unsafe fn register_finalizer(
@@ -55,12 +68,18 @@ impl GcAllocator {
         old_finalizer: *mut extern "C" fn(*mut u8, *mut u8),
         old_client_data: *mut *mut u8,
     ) {
-        GC_register_finalizer_no_order(obj, finalizer, client_data, old_finalizer, old_client_data)
+        boehm::GC_register_finalizer_no_order(
+            obj,
+            finalizer,
+            client_data,
+            old_finalizer,
+            old_client_data,
+        )
     }
 
     pub fn unregister_finalizer(&self, gcbox: *mut u8) {
         unsafe {
-            GC_register_finalizer(
+            boehm::GC_register_finalizer(
                 gcbox,
                 None,
                 ::core::ptr::null_mut(),
@@ -73,12 +92,12 @@ impl GcAllocator {
     pub fn get_stats() -> GcStats {
         let mut ps = ProfileStats::default();
         unsafe {
-            GC_get_prof_stats(
+            boehm::GC_get_prof_stats(
                 &mut ps as *mut ProfileStats,
                 core::mem::size_of::<ProfileStats>(),
             );
         }
-        let total_gc_time = unsafe { GC_get_full_gc_total_time() };
+        let total_gc_time = unsafe { boehm::GC_get_full_gc_total_time() };
 
         GcStats {
             total_gc_time,
@@ -89,7 +108,7 @@ impl GcAllocator {
     }
 
     pub fn init() {
-        unsafe { GC_start_performance_measurement() };
+        unsafe { boehm::GC_start_performance_measurement() };
     }
 }
 
@@ -129,41 +148,4 @@ pub struct GcStats {
     num_collections: usize,
     total_freed: usize,   // In bytes
     total_alloced: usize, // In bytes
-}
-
-#[link(name = "gc")]
-extern "C" {
-    fn GC_malloc(nbytes: usize) -> *mut u8;
-
-    #[cfg(not(feature = "rustgc"))]
-    fn GC_malloc_uncollectable(nbytes: usize) -> *mut u8;
-
-    fn GC_realloc(old: *mut u8, new_size: usize) -> *mut u8;
-
-    fn GC_free(dead: *mut u8);
-
-    fn GC_register_finalizer(
-        ptr: *mut u8,
-        finalizer: Option<unsafe extern "C" fn(*mut u8, *mut u8)>,
-        client_data: *mut u8,
-        old_finalizer: *mut extern "C" fn(*mut u8, *mut u8),
-        old_client_data: *mut *mut u8,
-    );
-
-    fn GC_register_finalizer_no_order(
-        ptr: *mut u8,
-        finalizer: Option<unsafe extern "C" fn(*mut u8, *mut u8)>,
-        client_data: *mut u8,
-        old_finalizer: *mut extern "C" fn(*mut u8, *mut u8),
-        old_client_data: *mut *mut u8,
-    );
-
-    fn GC_gcollect();
-
-    fn GC_start_performance_measurement();
-
-    fn GC_get_full_gc_total_time() -> usize;
-
-    fn GC_get_prof_stats(prof_stats: *mut ProfileStats, stats_size: usize) -> usize;
-
 }
