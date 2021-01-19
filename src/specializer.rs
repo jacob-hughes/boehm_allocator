@@ -11,7 +11,9 @@ use core::{
 #[cfg(test)]
 use core::cell::Cell;
 
+use crate::ALLOCATOR;
 use crate::boehm;
+
 
 /// An allocation helper to potentially optimise the marking of allocated
 /// blocks.

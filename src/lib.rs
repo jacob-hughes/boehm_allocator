@@ -9,6 +9,7 @@
 #![feature(specialization)]
 #![feature(negative_impls)]
 #![allow(incomplete_features)]
+#![allow(dead_code)]
 
 use core::{
     alloc::{AllocError, Allocator, GlobalAlloc, Layout},
@@ -20,6 +21,9 @@ pub struct GcAllocator;
 mod boehm;
 #[cfg(feature = "rustgc_internal")]
 mod specializer;
+
+#[cfg(feature = "rustgc_internal")]
+pub(crate) static ALLOCATOR: GcAllocator = GcAllocator;
 
 unsafe impl GlobalAlloc for GcAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -35,6 +39,23 @@ unsafe impl GlobalAlloc for GcAllocator {
 
     unsafe fn realloc(&self, ptr: *mut u8, _: Layout, new_size: usize) -> *mut u8 {
         boehm::GC_realloc(ptr, new_size) as *mut u8
+    }
+
+    #[cfg(feature = "rustgc_internal")]
+    unsafe fn alloc_precise(&self, layout: Layout, bitmap: usize, bitmap_size: usize) -> *mut u8 {
+        let gc_descr =
+            boehm::GC_make_descriptor(&bitmap, bitmap_size);
+        boehm::GC_malloc_explicitly_typed(layout.size(), gc_descr) as *mut u8
+    }
+
+    #[cfg(feature = "rustgc_internal")]
+    fn alloc_conservative(&self, layout: Layout) -> *mut u8 {
+        unsafe { boehm::GC_malloc(layout.size()) as *mut u8 }
+    }
+
+    #[cfg(feature = "rustgc_internal")]
+    unsafe fn alloc_atomic(&self, layout: Layout) -> *mut u8 {
+        boehm::GC_malloc_atomic(layout.size()) as *mut u8
     }
 }
 
@@ -54,6 +75,20 @@ impl GcAllocator {
     pub fn maybe_optimised_alloc<T>(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let sp = specializer::AllocationSpecializer::new();
         sp.maybe_optimised_alloc::<T>(layout)
+    }
+
+    #[cfg(not(test))]
+    const fn new() -> GcAllocator {
+        GcAllocator
+    }
+
+    #[cfg(test)]
+    const fn new() -> GcAllocator {
+        GcAllocator {
+            num_atomic: Cell::new(0),
+            num_precise: Cell::new(0),
+            num_conservative: Cell::new(0),
+        }
     }
 
     pub fn force_gc() {
